@@ -2,6 +2,8 @@ from aws_cdk import (
     Stack,
     aws_ec2 as ec2,
     aws_iam as iam,
+    aws_ecr as ecr,
+    RemovalPolicy
 )
 from constructs import Construct
 
@@ -79,7 +81,31 @@ class MyCdkAppStack(Stack):
                     "es:ESHttpDelete",
                 ],
                 resources=[
-                    "arn:aws:es:eu-west-1:ACCOUNT_ID:domain/my-domain/*"
+                    f"arn:aws:es:{self.region}:{self.account}:domain/my-domain/*"
                 ]
             )
+        )
+
+        orchestrator_repo = ecr.Repository(
+            self,
+            "OrchestratorRepo",
+            repository_name="orchestrator",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_images=True
+        )
+
+        retriever_repo = ecr.Repository(
+            self,
+            "RetrieverRepo",
+            repository_name="retriever",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_images=True
+        )
+
+        ingestion_repo = ecr.Repository(
+            self,
+            "IngestionRepo",
+            repository_name="ingestion",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_images=True
         )
