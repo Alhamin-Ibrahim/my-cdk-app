@@ -1,16 +1,22 @@
-import json
 import boto3
 from opensearchpy import OpenSearch, RequestsHttpConnection
 from requests_aws4auth import AWS4Auth
 
 
 def handler(event, context):
+
+    request_type = event["RequestType"]
+
+    if request_type == "Delete":
+        return {"Status": "SUCCESS"}
+
     host = event["ResourceProperties"]["CollectionEndpoint"].replace("https://", "")
 
     region = "eu-west-1"
     service = "aoss"
 
-    credentials = boto3.Session().get_credentials()
+    session = boto3.Session()
+    credentials = session.get_credentials()
 
     awsauth = AWS4Auth(
         credentials.access_key,
@@ -53,6 +59,4 @@ def handler(event, context):
     if not client.indices.exists(index=index_name):
         client.indices.create(index=index_name, body=index_body)
 
-    return {
-        "Status": "SUCCESS"
-    }
+    return {"Status": "SUCCESS"}
