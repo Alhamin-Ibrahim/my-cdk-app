@@ -3,7 +3,10 @@ from aws_cdk import (
     aws_ec2 as ec2,
     aws_iam as iam,
     aws_ecr as ecr,
-    RemovalPolicy
+    RemovalPolicy,
+    aws_s3 as s3,
+    Duration,
+    aws_s3_notifications as s3n,
 )
 from constructs import Construct
 
@@ -108,4 +111,22 @@ class MyCdkAppStack(Stack):
             repository_name="ingestion",
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_images=True
+        )
+
+        # S3 bucket for storing data
+        document_bucket = s3.Bucket(
+            self,
+            "DocumentBucket",
+            versioned=True,
+            event_bridge_enabled=True,
+            lifecycle_rules=[
+                s3.LifecycleRule(
+                    transitions=[
+                        s3.Transition(
+                            storage_class=s3.StorageClass.GLACIER,
+                            transition_after=Duration.days(90)
+                        )
+                    ]
+                )
+            ]
         )
