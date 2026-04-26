@@ -7,6 +7,10 @@ from aws_cdk import (
     aws_s3 as s3,
     Duration,
     aws_s3_notifications as s3n,
+    aws_opensearchserverless as opensearchserverless,
+    aws_lambda as _lambda,
+    custom_resources as cr,
+    CustomResource
 )
 from constructs import Construct
 
@@ -54,6 +58,7 @@ class MyCdkAppStack(Stack):
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
         )
 
+        # Permissions for S3 access
         task_role.add_to_policy(
             iam.PolicyStatement(
                 actions=[
@@ -66,6 +71,7 @@ class MyCdkAppStack(Stack):
             )
         )
 
+        # Permissions for Bedrock access   
         task_role.add_to_policy(
             iam.PolicyStatement(
                 actions=[
@@ -75,6 +81,7 @@ class MyCdkAppStack(Stack):
             )
         )
 
+        # Permissions for OpenSearch access
         task_role.add_to_policy(
             iam.PolicyStatement(
                 actions=[
@@ -89,6 +96,7 @@ class MyCdkAppStack(Stack):
             )
         )
 
+        #ECR repositories for app containers
         orchestrator_repo = ecr.Repository(
             self,
             "OrchestratorRepo",
@@ -130,3 +138,134 @@ class MyCdkAppStack(Stack):
                 )
             ]
         )
+
+        encryption_policy = opensearchserverless.CfnSecurityPolicy(
+            self,
+            "EncryptionPolicy",
+            name="vector-encryption-policy",
+            type="encryption",
+            policy="""
+            {
+            "Rules": [
+                {
+                "Resource": ["collection/vector-collection"],
+                "ResourceType": "collection"
+                }
+            ],
+            "AWSOwnedKey": true
+            }
+            """
+        )
+
+        network_policy = opensearchserverless.CfnSecurityPolicy(
+            self,
+            "NetworkPolicy",
+            name="vector-network-policy",
+            type="network",
+            policy="""
+            [
+            {
+                "Rules": [
+                {
+                    "Resource": ["collection/vector-collection"],   
+                    "ResourceType": "collection"
+                }
+                ],
+                "AllowFromPublic": true
+            }
+            ]
+            """
+        )
+
+        collection = opensearchserverless.CfnCollection(
+            self,
+            "VectorCollection",
+            name="vector-collection",
+            type="VECTORSEARCH"
+        )
+        collection.add_dependency(encryption_policy)
+        collection.add_dependency(network_policy)
+
+        data_policy = opensearchserverless.CfnAccessPolicy(
+            self,
+            "DataAccessPolicy",
+            name="vector-access-policy",
+            type="data",
+            policy=f"""
+            [
+            {{
+                "Rules": [
+                {{
+                    "Resource": ["collection/vector-collection"],
+                    "Permission": [
+                    "aoss:CreateCollectionItems",
+                    "aoss:DeleteCollectionItems",
+                    "aoss:UpdateCollectionItems",
+                    "aoss:DescribeCollectionItems"
+                    ],
+                    "ResourceType": "collection"
+                }},
+                {{
+                    "Resource": ["index/vector-collection/*"],
+                    "Permission": [
+                    "aoss:CreateIndex",
+                    "aoss:DeleteIndex",
+                    "aoss:UpdateIndex",
+                    "aoss:DescribeIndex",
+                    "aoss:ReadDocument",
+                    "aoss:WriteDocument"
+                    ],
+                    "ResourceType": "index"
+                }}
+                ],
+                "Principal": [
+                    "{task_role.role_arn}",
+                    "arn:aws:iam::{self.account}:root"
+                ]
+            }}
+            ]
+            """
+        )
+
+        index_lambda = _lambda.Function(
+            self,
+            "IndexCreatorFunction",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            handler="index_creator.handler",
+            code=_lambda.Code.from_asset(
+                "lambda/index_creator",
+                bundling={
+                    "image": _lambda.Runtime.PYTHON_3_11.bundling_image,
+                    "command": [
+                        "bash",
+                        "-c",
+                        "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output"
+                    ],
+                },
+            ),
+            timeout=Duration.minutes(5),
+        )
+
+        index_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["aoss:*"],
+                resources=["*"]
+            )
+        )
+
+        provider = cr.Provider(
+            self,
+            "IndexProvider",
+            on_event_handler=index_lambda
+        )
+
+        index_resource = CustomResource(
+            self,
+            "CreateIndex",
+            service_token=provider.service_token,
+            properties={
+                "CollectionEndpoint": collection.attr_collection_endpoint
+            }
+        )
+
+        index_resource.node.add_dependency(collection)
