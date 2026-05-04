@@ -1,6 +1,5 @@
-langchain==0.3.0
-langchain-aws==0.2.0
-opensearch-py==2.7.0
-boto3==1.28.0
-requests-aws4auth==1.1.0
-pypdf2>=3.0.0
+langchain
+langchain-aws
+opensearch-py
+requests-aws4auth
+pypdf
