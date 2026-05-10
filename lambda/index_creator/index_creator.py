@@ -46,7 +46,7 @@ def handler(event, context):
             "properties": {
                 "embedding": {
                     "type": "knn_vector",
-                    "dimension": 1536
+                    "dimension": 1024
                 },
                 "text": {
                     "type": "text"
