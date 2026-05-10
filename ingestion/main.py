@@ -70,7 +70,6 @@ def index_chunks(client, index_name, chunks, source_key):
 
         actions.append({
             "_index": index_name,
-            "_id": f"{source_key}-{i}",
             "_source": {
                 "text": chunk_obj["text"],
                 "embedding": embedding,
