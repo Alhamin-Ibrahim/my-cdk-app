@@ -31,7 +31,7 @@ def chunk_pages(pages):
 
 def get_embedding(text):
     response = bedrock.invoke_model(
-        modelId="amazon.titan-embed-text-v1",
+        modelId="amazon.titan-embed-text-v2:0",
         body=json.dumps({
             "inputText": text
         })
