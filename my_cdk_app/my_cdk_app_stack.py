@@ -10,9 +10,13 @@ from aws_cdk import (
     aws_opensearchserverless as opensearchserverless,
     aws_lambda as _lambda,
     custom_resources as cr,
-    CustomResource
+    CustomResource,
+    aws_ecs as ecs,
+    aws_events as events,
+    aws_events_targets as targets,
 )
 from constructs import Construct
+import json
 
 class MyCdkAppStack(Stack):
 
@@ -33,6 +37,24 @@ class MyCdkAppStack(Stack):
                     name="PrivateSubnet",
                     subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
                     cidr_mask=24
+                )
+            ]
+        )
+
+        # S3 bucket for storing data
+        document_bucket = s3.Bucket(
+            self,
+            "DocumentBucket",
+            versioned=True,
+            event_bridge_enabled=True,
+            lifecycle_rules=[
+                s3.LifecycleRule(
+                    transitions=[
+                        s3.Transition(
+                            storage_class=s3.StorageClass.GLACIER,
+                            transition_after=Duration.days(90)
+                        )
+                    ]
                 )
             ]
         )
@@ -66,7 +88,7 @@ class MyCdkAppStack(Stack):
                     "s3:PutObject"  
                 ],
                 resources=[
-                    "arn:aws:s3:::my-bucket-name/*"
+                    f"{document_bucket.bucket_arn}/*"
                 ]
             )
         )
@@ -78,21 +100,6 @@ class MyCdkAppStack(Stack):
                     "bedrock:InvokeModel"
                 ],
                 resources=["*"]
-            )
-        )
-
-        # Permissions for OpenSearch access
-        task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=[
-                    "es:ESHttpGet",
-                    "es:ESHttpPost",
-                    "es:ESHttpPut",
-                    "es:ESHttpDelete",
-                ],
-                resources=[
-                    f"arn:aws:es:{self.region}:{self.account}:domain/my-domain/*"
-                ]
             )
         )
 
@@ -121,23 +128,6 @@ class MyCdkAppStack(Stack):
             auto_delete_images=True
         )
 
-        # S3 bucket for storing data
-        document_bucket = s3.Bucket(
-            self,
-            "DocumentBucket",
-            versioned=True,
-            event_bridge_enabled=True,
-            lifecycle_rules=[
-                s3.LifecycleRule(
-                    transitions=[
-                        s3.Transition(
-                            storage_class=s3.StorageClass.GLACIER,
-                            transition_after=Duration.days(90)
-                        )
-                    ]
-                )
-            ]
-        )
 
         encryption_policy = opensearchserverless.CfnSecurityPolicy(
             self,
@@ -169,6 +159,10 @@ class MyCdkAppStack(Stack):
                 {
                     "Resource": ["collection/vector-collection"],   
                     "ResourceType": "collection"
+                },
+                {
+                    "Resource": ["collection/vector-collection"],
+                    "ResourceType": "dashboard"
                 }
                 ],
                 "AllowFromPublic": true
@@ -186,45 +180,12 @@ class MyCdkAppStack(Stack):
         collection.add_dependency(encryption_policy)
         collection.add_dependency(network_policy)
 
-        data_policy = opensearchserverless.CfnAccessPolicy(
-            self,
-            "DataAccessPolicy",
-            name="vector-access-policy",
-            type="data",
-            policy=f"""
-            [
-            {{
-                "Rules": [
-                {{
-                    "Resource": ["collection/vector-collection"],
-                    "Permission": [
-                    "aoss:CreateCollectionItems",
-                    "aoss:DeleteCollectionItems",
-                    "aoss:UpdateCollectionItems",
-                    "aoss:DescribeCollectionItems"
-                    ],
-                    "ResourceType": "collection"
-                }},
-                {{
-                    "Resource": ["index/vector-collection/*"],
-                    "Permission": [
-                    "aoss:CreateIndex",
-                    "aoss:DeleteIndex",
-                    "aoss:UpdateIndex",
-                    "aoss:DescribeIndex",
-                    "aoss:ReadDocument",
-                    "aoss:WriteDocument"
-                    ],
-                    "ResourceType": "index"
-                }}
-                ],
-                "Principal": [
-                    "{task_role.role_arn}",
-                    "arn:aws:iam::{self.account}:root"
-                ]
-            }}
-            ]
-            """
+        # Permissions for OpenSearch access
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["aoss:APIAccessAll"],
+                resources=[collection.attr_arn]
+            )
         )
 
         index_lambda = _lambda.Function(
@@ -253,6 +214,47 @@ class MyCdkAppStack(Stack):
             )
         )
 
+        data_policy = opensearchserverless.CfnAccessPolicy(
+            self,
+            "DataAccessPolicy",
+            name="vector-access-policy",
+            type="data",
+            policy=json.dumps([
+                {
+                    "Rules": [
+                        {
+                            "Resource": ["collection/vector-collection"],
+                            "Permission": [
+                                "aoss:CreateCollectionItems",
+                                "aoss:DeleteCollectionItems",
+                                "aoss:UpdateCollectionItems",
+                                "aoss:DescribeCollectionItems"
+                            ],
+                            "ResourceType": "collection"
+                        },
+                        {
+                            "Resource": ["index/vector-collection/*"],
+                            "Permission": [
+                                "aoss:CreateIndex",
+                                "aoss:DeleteIndex",
+                                "aoss:UpdateIndex",
+                                "aoss:DescribeIndex",
+                                "aoss:ReadDocument",
+                                "aoss:WriteDocument"
+                            ],
+                            "ResourceType": "index"
+                        }
+                    ],
+                    "Principal": [
+                        task_role.role_arn,
+                        index_lambda.role.role_arn, 
+                        f"arn:aws:iam::{self.account}:user/alhaminibrahim"
+                    ]
+                }
+            ])
+        )
+        data_policy.add_dependency(collection)
+
         provider = cr.Provider(
             self,
             "IndexProvider",
@@ -269,3 +271,89 @@ class MyCdkAppStack(Stack):
         )
 
         index_resource.node.add_dependency(collection)
+        index_resource.node.add_dependency(data_policy)
+
+        cluster = ecs.Cluster(
+            self,
+            "Cluster",
+            vpc=vpc
+        )
+
+        task_definition = ecs.FargateTaskDefinition(
+            self,
+            "IngestionTask",
+            cpu=256,
+            memory_limit_mib=512,
+            execution_role=execution_role,
+            task_role=task_role,
+        )
+
+        container = task_definition.add_container(
+            "IngestionContainer",
+            image=ecs.ContainerImage.from_ecr_repository(ingestion_repo),
+            logging=ecs.LogDrivers.aws_logs(stream_prefix="ingestion"),
+            command=["python", "main.py"],
+        )
+
+        events_role = iam.Role(
+            self,
+            "EventsEcsRole",
+            assumed_by=iam.ServicePrincipal("events.amazonaws.com"),
+        )
+        events_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["ecs:RunTask"],
+                resources=[task_definition.task_definition_arn]
+            )
+        )
+        events_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["iam:PassRole"],
+                resources=[execution_role.role_arn, task_role.role_arn]
+            )
+        )
+
+        rule = events.Rule(
+            self,
+            "S3UploadRule",
+            event_pattern=events.EventPattern(
+                source=["aws.s3"],
+                detail_type=["Object Created"],
+                detail={
+                    "bucket": {
+                        "name": [document_bucket.bucket_name]
+                    }
+                }
+            )
+        )
+
+        rule.add_target(
+            targets.EcsTask(
+                cluster=cluster,
+                task_definition=task_definition,
+                role=events_role,
+                subnet_selection=ec2.SubnetSelection(
+                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+                ),
+                task_count=1,
+                container_overrides=[
+                    targets.ContainerOverride(
+                        container_name="IngestionContainer",
+                        environment=[
+                            targets.TaskEnvironmentVariable(
+                                name="BUCKET_NAME",
+                                value=events.EventField.from_path("$.detail.bucket.name")
+                            ),
+                            targets.TaskEnvironmentVariable(
+                                name="OBJECT_KEY",
+                                value=events.EventField.from_path("$.detail.object.key")
+                            ),
+                            targets.TaskEnvironmentVariable(
+                                name="OPENSEARCH_ENDPOINT",
+                                value=collection.attr_collection_endpoint
+                            ),
+                        ]
+                    )
+                ]
+            )
+        )

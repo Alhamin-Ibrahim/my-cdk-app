@@ -1,7 +1,7 @@
 import boto3
 from opensearchpy import OpenSearch, RequestsHttpConnection
 from requests_aws4auth import AWS4Auth
-
+import time
 
 def handler(event, context):
 
@@ -9,6 +9,8 @@ def handler(event, context):
 
     if request_type == "Delete":
         return {"Status": "SUCCESS"}
+    
+    time.sleep(30)
 
     host = event["ResourceProperties"]["CollectionEndpoint"].replace("https://", "")
 
@@ -16,7 +18,7 @@ def handler(event, context):
     service = "aoss"
 
     session = boto3.Session()
-    credentials = session.get_credentials()
+    credentials = session.get_credentials().get_frozen_credentials()
 
     awsauth = AWS4Auth(
         credentials.access_key,
