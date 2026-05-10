@@ -1,5 +1,7 @@
-langchain
+langchain-core
+langchain-text-splitters
 langchain-aws
 opensearch-py
 requests-aws4auth
 pypdf
+boto3>=1.34.131
