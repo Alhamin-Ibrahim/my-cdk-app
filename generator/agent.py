@@ -83,7 +83,6 @@ def call_haiku(prompt: str) -> str:
         inferenceConfig={
             "maxTokens": MAX_TOKENS,
             "temperature": 0.1, 
-            "topP": 0.9,
         },
     )
 

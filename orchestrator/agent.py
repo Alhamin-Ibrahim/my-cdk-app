@@ -17,7 +17,7 @@ from generator.agent import generator_node, direct_answer_node
 logger = logging.getLogger(__name__)
 
 REGION = os.environ.get("AWS_REGION", "eu-west-1")
-MODEL_ID = "anthropic.claude-haiku-4-5"
+MODEL_ID = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # Queries that are clearly general (no document retrieval needed).
 GENERAL_PATTERNS = [
