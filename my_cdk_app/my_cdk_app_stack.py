@@ -6,7 +6,6 @@ from aws_cdk import (
     RemovalPolicy,
     aws_s3 as s3,
     Duration,
-    aws_s3_notifications as s3n,
     aws_opensearchserverless as opensearchserverless,
     aws_lambda as _lambda,
     custom_resources as cr,
@@ -14,16 +13,18 @@ from aws_cdk import (
     aws_ecs as ecs,
     aws_events as events,
     aws_events_targets as targets,
+    aws_dynamodb as dynamodb,
 )
 from constructs import Construct
 import json
+
 
 class MyCdkAppStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # Create a VPC with public and private subnets across two availability zones and a NAT gateway
+        # Create a VPC with public and private subnets across two AZs and a NAT gateway
         vpc = ec2.Vpc(self, "MyVPC",
             max_azs=2,
             nat_gateways=1,
@@ -41,7 +42,7 @@ class MyCdkAppStack(Stack):
             ]
         )
 
-        # S3 bucket for storing data
+        # S3 bucket for storing documents
         document_bucket = s3.Bucket(
             self,
             "DocumentBucket",
@@ -59,52 +60,35 @@ class MyCdkAppStack(Stack):
             ]
         )
 
-        # ECS to pull images from ECR and write CloudWatch logs
+        # ECS execution role: pulls images from ECR and writes CloudWatch logs
         execution_role = iam.Role(
             self,
             "ExecutionRole",
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
         )
-
-        #
         execution_role.add_managed_policy(
             iam.ManagedPolicy.from_aws_managed_policy_name(
                 "service-role/AmazonECSTaskExecutionRolePolicy"
             )
         )
 
-        # App containers to call Bedrock, S3, OpenSearch
+        # ECS task role: used by app containers to call AWS services
         task_role = iam.Role(
             self,
             "TaskRole",
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
         )
 
-        # Permissions for S3 access
+        # S3 read/write on the document bucket
         task_role.add_to_policy(
             iam.PolicyStatement(
-                actions=[
-                    "s3:GetObject",
-                    "s3:PutObject"  
-                ],
-                resources=[
-                    f"{document_bucket.bucket_arn}/*"
-                ]
+                actions=["s3:GetObject", "s3:PutObject"],
+                resources=[f"{document_bucket.bucket_arn}/*"]
             )
         )
 
-        # Permissions for Bedrock access   
-        task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=[
-                    "bedrock:InvokeModel"
-                ],
-                resources=["*"]
-            )
-        )
-
-        #ECR repositories for app containers
-        orchestrator_repo = ecr.Repository(
+        # ECR repositories
+        orchestrator_repo = ecr.Repository(  # noqa: F841
             self,
             "OrchestratorRepo",
             repository_name="orchestrator",
@@ -112,7 +96,7 @@ class MyCdkAppStack(Stack):
             auto_delete_images=True
         )
 
-        retriever_repo = ecr.Repository(
+        retriever_repo = ecr.Repository(  # noqa: F841
             self,
             "RetrieverRepo",
             repository_name="retriever",
@@ -128,23 +112,22 @@ class MyCdkAppStack(Stack):
             auto_delete_images=True
         )
 
+        # ── OpenSearch Serverless ──────────────────────────────────────────
 
         encryption_policy = opensearchserverless.CfnSecurityPolicy(
             self,
             "EncryptionPolicy",
             name="vector-encryption-policy",
             type="encryption",
-            policy="""
-            {
-            "Rules": [
-                {
-                "Resource": ["collection/vector-collection"],
-                "ResourceType": "collection"
-                }
-            ],
-            "AWSOwnedKey": true
-            }
-            """
+            policy=json.dumps({
+                "Rules": [
+                    {
+                        "Resource": ["collection/vector-collection"],
+                        "ResourceType": "collection"
+                    }
+                ],
+                "AWSOwnedKey": True
+            })
         )
 
         network_policy = opensearchserverless.CfnSecurityPolicy(
@@ -152,23 +135,21 @@ class MyCdkAppStack(Stack):
             "NetworkPolicy",
             name="vector-network-policy",
             type="network",
-            policy="""
-            [
-            {
-                "Rules": [
+            policy=json.dumps([
                 {
-                    "Resource": ["collection/vector-collection"],   
-                    "ResourceType": "collection"
-                },
-                {
-                    "Resource": ["collection/vector-collection"],
-                    "ResourceType": "dashboard"
+                    "Rules": [
+                        {
+                            "Resource": ["collection/vector-collection"],
+                            "ResourceType": "collection"
+                        },
+                        {
+                            "Resource": ["collection/vector-collection"],
+                            "ResourceType": "dashboard"
+                        }
+                    ],
+                    "AllowFromPublic": True
                 }
-                ],
-                "AllowFromPublic": true
-            }
-            ]
-            """
+            ])
         )
 
         collection = opensearchserverless.CfnCollection(
@@ -180,13 +161,7 @@ class MyCdkAppStack(Stack):
         collection.add_dependency(encryption_policy)
         collection.add_dependency(network_policy)
 
-        # Permissions for OpenSearch access
-        task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["aoss:APIAccessAll"],
-                resources=[collection.attr_arn]
-            )
-        )
+        # ── Lambda: creates the kNN index on first deploy ──────────────────
 
         index_lambda = _lambda.Function(
             self,
@@ -198,8 +173,7 @@ class MyCdkAppStack(Stack):
                 bundling={
                     "image": _lambda.Runtime.PYTHON_3_11.bundling_image,
                     "command": [
-                        "bash",
-                        "-c",
+                        "bash", "-c",
                         "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output"
                     ],
                 },
@@ -214,6 +188,7 @@ class MyCdkAppStack(Stack):
             )
         )
 
+        # Data access policy: grants task role, Lambda role, and your IAM user
         data_policy = opensearchserverless.CfnAccessPolicy(
             self,
             "DataAccessPolicy",
@@ -247,7 +222,7 @@ class MyCdkAppStack(Stack):
                     ],
                     "Principal": [
                         task_role.role_arn,
-                        index_lambda.role.role_arn, 
+                        index_lambda.role.role_arn,
                         f"arn:aws:iam::{self.account}:user/alhaminibrahim"
                     ]
                 }
@@ -255,6 +230,15 @@ class MyCdkAppStack(Stack):
         )
         data_policy.add_dependency(collection)
 
+        # Task role also needs aoss:APIAccessAll for the data plane
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["aoss:APIAccessAll"],
+                resources=[collection.attr_arn]
+            )
+        )
+
+        # Custom resource: triggers the Lambda to create the index after deploy
         provider = cr.Provider(
             self,
             "IndexProvider",
@@ -269,15 +253,12 @@ class MyCdkAppStack(Stack):
                 "CollectionEndpoint": collection.attr_collection_endpoint
             }
         )
-
         index_resource.node.add_dependency(collection)
         index_resource.node.add_dependency(data_policy)
 
-        cluster = ecs.Cluster(
-            self,
-            "Cluster",
-            vpc=vpc
-        )
+        # ── ECS cluster + ingestion task definition ────────────────────────
+
+        cluster = ecs.Cluster(self, "Cluster", vpc=vpc)
 
         task_definition = ecs.FargateTaskDefinition(
             self,
@@ -288,12 +269,14 @@ class MyCdkAppStack(Stack):
             task_role=task_role,
         )
 
-        container = task_definition.add_container(
+        ingestion_container = task_definition.add_container(
             "IngestionContainer",
             image=ecs.ContainerImage.from_ecr_repository(ingestion_repo),
             logging=ecs.LogDrivers.aws_logs(stream_prefix="ingestion"),
             command=["python", "main.py"],
         )
+
+        # ── EventBridge rule: trigger ingestion task on S3 upload ──────────
 
         events_role = iam.Role(
             self,
@@ -356,4 +339,47 @@ class MyCdkAppStack(Stack):
                     )
                 ]
             )
+        )
+
+        # ── DynamoDB conversation memory ──────────────────────────
+
+        conversation_table = dynamodb.Table(
+            self,
+            "ConversationHistory",
+            table_name="rag-conversation-history",
+            partition_key=dynamodb.Attribute(
+                name="session_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            sort_key=dynamodb.Attribute(
+                name="turn_number",
+                type=dynamodb.AttributeType.NUMBER,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            time_to_live_attribute="ttl",
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        # Grant task role read/write on the conversation table
+        conversation_table.grant_read_write_data(task_role)
+
+        # Bedrock: Claude Haiku + Titan Embeddings
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+                resources=[
+                    f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-haiku-4-5",
+                    f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v1",
+                ],
+            )
+        )
+
+        # Inject runtime config into the ingestion container as environment variables
+        # Secrets (API keys, passwords) would use secretsFrom + Secrets Manager instead
+        ingestion_container.add_environment(
+            "OPENSEARCH_ENDPOINT", collection.attr_collection_endpoint
+        )
+        ingestion_container.add_environment("OPENSEARCH_INDEX", "documents")
+        ingestion_container.add_environment(
+            "DYNAMODB_TABLE_NAME", conversation_table.table_name
         )
