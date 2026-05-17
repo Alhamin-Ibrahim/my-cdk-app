@@ -369,7 +369,7 @@ class MyCdkAppStack(Stack):
                 actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
                 resources=[
                     f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-haiku-4-5",
-                    f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v1",
+                    f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v2",
                 ],
             )
         )
