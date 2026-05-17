@@ -73,7 +73,7 @@ def knn_search(client: OpenSearch, query_vector: list[float]) -> list[dict[str, 
     return [
         {
             "text": h["_source"]["text"],
-            "source": h["_source"].get("source_file", "unknown"),
+            "source": h["_source"].get("source", "unknown"),
             "chunk_index": h["_source"].get("chunk_index", 0),
             "knn_score": h["_score"],
             "knn_rank": i + 1,   
