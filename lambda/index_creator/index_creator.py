@@ -10,7 +10,7 @@ def handler(event, context):
     if request_type == "Delete":
         return {"Status": "SUCCESS"}
     
-    time.sleep(30)
+    time.sleep(60)
 
     host = event["ResourceProperties"]["CollectionEndpoint"].replace("https://", "")
 

@@ -188,6 +188,13 @@ class MyCdkAppStack(Stack):
             )
         )
 
+        # Custom resource: triggers the Lambda to create the index after deploy
+        provider = cr.Provider(
+            self,
+            "IndexProvider",
+            on_event_handler=index_lambda
+        )
+
         # Data access policy: grants task role, Lambda role, and your IAM user
         data_policy = opensearchserverless.CfnAccessPolicy(
             self,
@@ -236,13 +243,6 @@ class MyCdkAppStack(Stack):
                 actions=["aoss:APIAccessAll"],
                 resources=[collection.attr_arn]
             )
-        )
-
-        # Custom resource: triggers the Lambda to create the index after deploy
-        provider = cr.Provider(
-            self,
-            "IndexProvider",
-            on_event_handler=index_lambda
         )
 
         index_resource = CustomResource(
@@ -369,7 +369,7 @@ class MyCdkAppStack(Stack):
                 actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
                 resources=[
                     f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-haiku-4-5",
-                    f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v2",
+                    f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v2:0",
                 ],
             )
         )
