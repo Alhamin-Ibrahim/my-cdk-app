@@ -11,7 +11,7 @@ from orchestrator.state import AgentState
 logger = logging.getLogger(__name__)
 
 REGION = os.environ.get("AWS_REGION", "eu-west-1")
-MODEL_ID = "anthropic.claude-haiku-4-5"   # Claude Haiku on Bedrock
+MODEL_ID = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"   # Claude Haiku on Bedrock
 MAX_TOKENS = 1024
 
 

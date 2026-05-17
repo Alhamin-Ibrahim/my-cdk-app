@@ -43,7 +43,7 @@ def embed_query(query: str) -> list[float]:
     bedrock = _get_bedrock_client()
 
     response = bedrock.invoke_model(
-        modelId="amazon.titan-embed-text-v1",
+        modelId="amazon.titan-embed-text-v2:0",
         contentType="application/json",
         accept="application/json",
         body=json.dumps({"inputText": query}),

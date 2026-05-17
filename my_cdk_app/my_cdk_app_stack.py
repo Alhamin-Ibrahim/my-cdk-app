@@ -368,8 +368,8 @@ class MyCdkAppStack(Stack):
             iam.PolicyStatement(
                 actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
                 resources=[
-                    f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-haiku-4-5",
                     f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v2:0",
+                    f"arn:aws:bedrock:{self.region}::{self.account}:inference-profile/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
                 ],
             )
         )
