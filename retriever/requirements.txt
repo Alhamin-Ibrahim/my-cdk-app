@@ -1,3 +1,10 @@
 langchain
 langchain-aws
 opensearch-py
+fastapi
+uvicorn[standard]
+boto3
+aws-xray-sdk
+opensearch-py
+requests-aws4auth
+pydantic
