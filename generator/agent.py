@@ -11,7 +11,7 @@ from orchestrator.state import AgentState
 logger = logging.getLogger(__name__)
 
 REGION = os.environ.get("AWS_REGION", "eu-west-1")
-MODEL_ID = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"   # Claude Haiku on Bedrock
+MODEL_ID = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 MAX_TOKENS = 1024
 
 
@@ -20,17 +20,7 @@ def build_prompt(
     chunks: list[dict[str, Any]],
     history_text: str,
 ) -> str:
-    """
-    Construct the grounded RAG prompt.
-
-    Design decisions worth knowing:
-      - We number the chunks so the model can cite them easily ("Source [1]...")
-      - We include conversation history BEFORE the context so the model can
-        resolve pronouns ("What about the second option you mentioned?")
-      - The instruction explicitly tells the model to say "I don't know" if
-        the answer isn't in the context. This reduces hallucination.
-      - We ask for source citations so we can parse them back out.
-    """
+    # Construct the grounded RAG prompt.
     context_block = "\n\n".join(
         f"[{i+1}] (Source: {c['source']})\n{c['text']}"
         for i, c in enumerate(chunks)
@@ -127,17 +117,15 @@ def direct_answer_node(state: AgentState) -> dict:
     from orchestrator.memory import ConversationMemory
     history_text = ConversationMemory.format_for_prompt(None, history)
 
-    general_prompt = f"""{f'Conversation so far:{chr(10)}{history_text}{chr(10)}{chr(10)}' if history_text else ''}Question: {query}
+    general_prompt = f"""You are a helpful assistant with access to a document retrieval system.
+{f"Conversation so far:{chr(10)}{history_text}{chr(10)}" if history_text else ""}
+Question: {query}
 
-Answer helpfully and concisely. Do not make up information."""
+Answer based on the conversation history above if relevant. Be helpful and concise."""
 
     try:
         answer = call_haiku(general_prompt)
         return {"answer": answer, "sources": []}
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("Direct answer node failed")
-        return {
-            "answer": "Sorry, I couldn't generate an answer.",
-            "sources": [],
-            "error": str(exc),
-        }
+        return {"answer": "Sorry, I couldn't generate an answer.", "sources": [], "error": str(exc)}

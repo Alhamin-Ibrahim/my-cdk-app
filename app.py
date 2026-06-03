@@ -1,28 +1,34 @@
-#!/usr/bin/env python3
-import os
-
 import aws_cdk as cdk
-
 from my_cdk_app.my_cdk_app_stack import MyCdkAppStack
-
+from my_cdk_app.ecs_stack import EcsStack
 
 app = cdk.App()
-MyCdkAppStack(app, "MyCdkAppStack",
-    # If you don't specify 'env', this stack will be environment-agnostic.
-    # Account/Region-dependent features and context lookups will not work,
-    # but a single synthesized template can be deployed anywhere.
 
-    # Uncomment the next line to specialize this stack for the AWS Account
-    # and Region that are implied by the current CLI configuration.
+infra_stack = MyCdkAppStack(
+    app,
+    "MyCdkAppStack",
+    env=cdk.Environment(
+        account=app.node.try_get_context("account"),
+        region=app.node.try_get_context("region") or "eu-west-1",
+    ),
+)
 
-    #env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION')),
+ecs_stack = EcsStack(
+    app,
+    "EcsStack",
+    # Pass cross-stack values as constructor props
+    # Replace these with actual property references from your infra_stack
+    opensearch_endpoint=infra_stack.node.try_get_context("opensearch_endpoint")
+        or "https://l622892vevh1z8rvwjll.eu-west-1.aoss.amazonaws.com",
+    dynamodb_table_name=infra_stack.node.try_get_context("dynamodb_table_name")
+        or "rag-conversation-history",
+    env=cdk.Environment(
+        account=app.node.try_get_context("account"),
+        region=app.node.try_get_context("region") or "eu-west-1",
+    ),
+)
 
-    # Uncomment the next line if you know exactly what Account and Region you
-    # want to deploy the stack to. */
-
-    #env=cdk.Environment(account='123456789012', region='us-east-1'),
-
-    # For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html
-    )
+# Declare that ECS stack depends on infra stack — CDK will deploy in order
+ecs_stack.add_dependency(infra_stack)
 
 app.synth()

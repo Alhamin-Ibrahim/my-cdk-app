@@ -1,11 +1,17 @@
-name: Build and Push to ECR
+name: Build and Deploy to ECS
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
+  workflow_dispatch: 
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
 jobs:
-  build:
+  build-and-deploy:
+    name: Build, Push, Deploy
     runs-on: ubuntu-latest
 
     steps:
@@ -17,29 +23,82 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-west-1
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to ECR
-        run: |
-          aws ecr get-login-password \
-          | docker login \
-          --username AWS \
-          --password-stdin 739275458314.dkr.ecr.eu-west-1.amazonaws.com
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
+      # ------------------------------------------------------------------
+      # Build and push orchestrator
+      # ------------------------------------------------------------------
       - name: Build and push orchestrator
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t orchestrator ./orchestrator
-          docker tag orchestrator:latest 739275458314.dkr.ecr.eu-west-1.amazonaws.com/orchestrator:latest
-          docker push 739275458314.dkr.ecr.eu-west-1.amazonaws.com/orchestrator:latest
+          docker buildx build \
+            --platform linux/amd64 \
+            --cache-from type=gha,scope=orchestrator \
+            --cache-to type=gha,scope=orchestrator,mode=max \
+            --tag $ECR_REGISTRY/agent-orchestrator:$IMAGE_TAG \
+            --tag $ECR_REGISTRY/agent-orchestrator:latest \
+            --push \
+            ./orchestrator
 
+      # ------------------------------------------------------------------
+      # Build and push retriever
+      # ------------------------------------------------------------------
       - name: Build and push retriever
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t retriever ./retriever
-          docker tag retriever:latest 739275458314.dkr.ecr.eu-west-1.amazonaws.com/retriever:latest
-          docker push 739275458314.dkr.ecr.eu-west-1.amazonaws.com/retriever:latest
+          docker buildx build \
+            --platform linux/amd64 \
+            --cache-from type=gha,scope=retriever \
+            --cache-to type=gha,scope=retriever,mode=max \
+            --tag $ECR_REGISTRY/agent-retriever:$IMAGE_TAG \
+            --tag $ECR_REGISTRY/agent-retriever:latest \
+            --push \
+            ./retriever
 
-      - name: Build and push ingestion
+      # ------------------------------------------------------------------
+      # Trigger ECS rolling update
+      # ------------------------------------------------------------------
+      - name: Deploy orchestrator to ECS
         run: |
-          docker build -t ingestion ./ingestion
-          docker tag ingestion:latest 739275458314.dkr.ecr.eu-west-1.amazonaws.com/ingestion:latest
-          docker push 739275458314.dkr.ecr.eu-west-1.amazonaws.com/ingestion:latest
+          aws ecs update-service \
+            --cluster AgentCluster \
+            --service OrchestratorService \
+            --force-new-deployment \
+            --region $AWS_REGION
+
+      - name: Deploy retriever to ECS
+        run: |
+          aws ecs update-service \
+            --cluster AgentCluster \
+            --service RetrieverService \
+            --force-new-deployment \
+            --region $AWS_REGION
+
+      # ------------------------------------------------------------------
+      # Wait for deployment to stabilise
+      # ------------------------------------------------------------------
+      # This step blocks the workflow until ECS reports the new tasks
+      # as RUNNING and healthy. Fails the workflow if it takes > 10min.
+      - name: Wait for orchestrator to stabilise
+        run: |
+          aws ecs wait services-stable \
+            --cluster AgentCluster \
+            --services OrchestratorService \
+            --region $AWS_REGION
+
+      - name: Smoke test the ALB
+        run: |
+          ALB_DNS=$(aws cloudformation describe-stacks \
+            --stack-name EcsStack \
+            --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue" \
+            --output text \
+            --region $AWS_REGION)
+
+          echo "Testing health endpoint at $ALB_DNS/health"
+          curl --fail --retry 5 --retry-delay 10 "$ALB_DNS/health"
