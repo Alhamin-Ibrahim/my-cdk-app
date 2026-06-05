@@ -251,7 +251,6 @@ class InfraStack(Stack):
                         "Principal": [
                             self.task_role.role_arn,
                             index_lambda.role.role_arn,
-                            f"arn:aws:iam::{self.account}:user/alhaminibrahim",
                         ],
                     }
                 ]
