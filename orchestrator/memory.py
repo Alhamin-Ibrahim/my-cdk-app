@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Optional
+from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
@@ -10,9 +10,9 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger(__name__)
 
 TABLE_NAME = "rag-conversation-history"
-TTL_SECONDS = 86_400          # 24 hours
-MAX_HISTORY_TURNS = 5         # how many turns to load per query
-MAX_TURNS_TO_STORE = 50       # cap total turns per session
+TTL_SECONDS = 86_400        # 24 hours
+MAX_HISTORY_TURNS = 5       # turns to load per query
+MAX_TURNS_TO_STORE = 50     # cap total turns per session
 
 
 class ConversationMemory:
@@ -27,18 +27,17 @@ class ConversationMemory:
                 KeyConditionExpression=boto3.dynamodb.conditions.Key(
                     "session_id"
                 ).eq(session_id),
-                ScanIndexForward=False,       # newest first
-                Limit=MAX_HISTORY_TURNS * 2,  # *2 because each turn = 2 items (user + assistant)
+                ScanIndexForward=False,        # newest first
+                Limit=MAX_HISTORY_TURNS * 2, 
                 ProjectionExpression="#r, content",
-                ExpressionAttributeNames={"#r": "role"},  # "role" is reserved in DDB
+                ExpressionAttributeNames={"#r": "role"}, 
             )
         except ClientError as exc:
             logger.warning("DynamoDB load_history failed: %s", exc)
             return []
 
         items = response.get("Items", [])
-        # Reverse so we get oldest-first for the LLM prompt
-        items.reverse()
+        items.reverse()   # oldest-first for the LLM prompt
         return [{"role": item["role"], "content": item["content"]} for item in items]
 
     def save_turn(self, session_id: str, role: str, content: str) -> None:
@@ -59,6 +58,18 @@ class ConversationMemory:
             logger.warning("DynamoDB save_turn failed: %s", exc)
 
     def format_for_prompt(self, history: list[dict[str, str]]) -> str:
+        """Format conversation history for inclusion in a prompt."""
+        return ConversationMemory.format_for_prompt_static(history)
+
+    @staticmethod
+    def format_for_prompt_static(history: list[dict[str, str]]) -> str:
+        """
+        Static version — safe to call without an instance.
+
+        The original code called `ConversationMemory.format_for_prompt(None, history)`
+        which relied on `self` being unused. Now generator/agent.py calls this
+        static method directly, removing the None-self anti-pattern.
+        """
         if not history:
             return ""
 

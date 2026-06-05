@@ -1,43 +1,19 @@
-import os
-import json
-import boto3
+import logging
+
+import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
-from opensearchpy import OpenSearch, RequestsHttpConnection
-from requests_aws4auth import AWS4Auth
-from aws_xray_sdk.core import xray_recorder, patch_all
-from aws_xray_sdk.core import xray_recorder
 
-# Configure X-Ray to not throw errors when no segment is open
+from aws_xray_sdk.core import xray_recorder, patch_all
+
 xray_recorder.configure(context_missing="LOG_ERROR")
 patch_all()
 
-app = FastAPI(title="Agent Retriever")
+from agent import retrieve  # noqa: E402 — must come after patch_all
 
-OPENSEARCH_ENDPOINT = os.environ.get("OPENSEARCH_ENDPOINT", "")
-BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
-INDEX_NAME = os.environ.get("INDEX_NAME", "documents")
+logging.basicConfig(level=logging.INFO)
 
-bedrock_runtime = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
-credentials = boto3.Session().get_credentials()
-
-# AWS4Auth handles signing requests to OpenSearch with AWS credentials
-auth = AWS4Auth(
-    credentials.access_key,
-    credentials.secret_key,
-    BEDROCK_REGION,
-    "aoss",
-    session_token=credentials.token,
-)
-
-opensearch_client = OpenSearch(
-    hosts=[{"host": OPENSEARCH_ENDPOINT.replace("https://", ""), "port": 443}],
-    http_auth=auth,
-    use_ssl=True,
-    verify_certs=True,
-    connection_class=RequestsHttpConnection,
-    pool_maxsize=20,
-)
+app = FastAPI(title="Agent Retriever", version="1.0.0")
 
 
 class RetrieveRequest(BaseModel):
@@ -47,43 +23,19 @@ class RetrieveRequest(BaseModel):
 
 @app.get("/health")
 async def health_check():
+    """ALB health check — must return HTTP 200."""
     return {"status": "ok"}
 
 
 @app.post("/retrieve")
-async def retrieve(request: RetrieveRequest):
-    # Step 1: Embed the query
-    with xray_recorder.capture("titan-embed"):
-        embed_response = bedrock_runtime.invoke_model(
-            modelId="amazon.titan-embed-text-v2:0",
-            body=json.dumps({"inputText": request.query}),
-            contentType="application/json",
-            accept="application/json",
-        )
-        embedding = json.loads(embed_response["body"].read())["embedding"]
+async def retrieve_endpoint(request: RetrieveRequest):
+    """
+    Embed the query, run kNN search against OpenSearch, apply BM25 re-ranking,
+    and return the top-N chunks with source metadata.
+    """
+    result = retrieve(query=request.query)
+    return result
 
-    # Step 2: k-NN search in OpenSearch
-    with xray_recorder.capture("opensearch-knn"):
-        search_body = {
-            "size": request.top_k,
-            "query": {
-                "knn": {
-                    "embedding": {
-                        "vector": embedding,
-                        "k": request.top_k,
-                    }
-                }
-            },
-            "_source": ["text", "source", "metadata"],
-        }
 
-        response = opensearch_client.search(
-            index=INDEX_NAME,
-            body=search_body,
-        )
-
-    hits = response["hits"]["hits"]
-    chunks = [hit["_source"].get("text", "") for hit in hits]
-    sources = list({hit["_source"].get("source", "") for hit in hits})
-
-    return {"chunks": chunks, "sources": sources, "count": len(chunks)}
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=False)

@@ -7,26 +7,26 @@ from typing_extensions import TypedDict
 
 class AgentState(TypedDict):
     """
-    The complete state object passed between every node in the graph.
+    Complete state passed between every node in the LangGraph graph.
 
-    Fields:
-        session_id:     UUID for this conversation session. Persists across turns.
-        query:          The raw user message for the current turn.
-        intent:         What the orchestrator decided: "retrieve" or "direct".
-        chunks:         Top-5 document chunks returned by the retriever.
-        answer:         The final generated answer string.
-        sources:        Document names cited in the answer.
-        history:        Last N conversation turns loaded from DynamoDB.
-                        Annotated with operator.add so parallel nodes can
-                        append to it without overwriting each other.
-        error:          Any error message — lets us handle failures gracefully
-                        without crashing the whole graph.
+    Fields
+    ------
+    session_id  UUID for this conversation. Persists across turns.
+    query       The raw user message for this turn.
+    intent      Routing decision: "retrieve" or "direct".
+    chunks      Top-N document chunks returned by the retriever service.
+    answer      The final generated answer string.
+    sources     Document names cited in the answer.
+    history     Last N turns loaded from DynamoDB.
+                Annotated with operator.add so parallel nodes can append
+                without overwriting each other.
+    error       Non-fatal error message — lets us degrade gracefully.
     """
 
     session_id: str
     query: str
-    intent: Optional[str]                          
-    chunks: Optional[list[dict[str, Any]]]    
+    intent: Optional[str]
+    chunks: Optional[list[Any]]
     answer: Optional[str]
     sources: Optional[list[str]]
     history: Annotated[list[dict[str, str]], operator.add]
