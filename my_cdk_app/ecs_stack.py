@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from aws_cdk import (
     CfnOutput,
     Duration,
@@ -12,6 +14,7 @@ from aws_cdk import (
     aws_elasticloadbalancingv2 as elbv2,
     aws_iam as iam,
     aws_logs as logs,
+    aws_opensearchserverless as aoss,
 )
 from constructs import Construct
 
@@ -130,6 +133,36 @@ class EcsStack(Stack):
                 actions=["xray:PutTraceSegments", "xray:PutTelemetryRecords"],
                 resources=["*"],
             )
+        )
+
+        # AOSS data access policy for the retriever 
+        retriever_data_policy = aoss.CfnAccessPolicy(
+            self,
+            "RetrieverDataAccessPolicy",
+            name="retriever-access-policy",
+            type="data",
+            policy=json.dumps(
+                [
+                    {
+                        "Rules": [
+                            {
+                                "Resource": ["collection/vector-collection"],
+                                "Permission": ["aoss:DescribeCollectionItems"],
+                                "ResourceType": "collection",
+                            },
+                            {
+                                "Resource": ["index/vector-collection/*"],
+                                "Permission": [
+                                    "aoss:DescribeIndex",
+                                    "aoss:ReadDocument",
+                                ],
+                                "ResourceType": "index",
+                            },
+                        ],
+                        "Principal": [retriever_task_role.role_arn],
+                    }
+                ]
+            ),
         )
 
         # CloudWatch log groups
