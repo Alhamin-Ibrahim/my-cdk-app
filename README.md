@@ -66,13 +66,20 @@ aws ecr get-login-password --region eu-west-1 | \
   YOUR_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com
 
 # Build and push each image
-for service in orchestrator retriever ingestion; do
-  docker build -t agent-$service ./$service
-  docker tag agent-$service:latest \
-    YOUR_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/agent-$service:latest
-  docker push \
-    YOUR_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/agent-$service:latest
-done
+docker build --platform linux/amd64 -t agent-orchestrator ./orchestrator && \
+  docker tag agent-orchestrator:latest \
+  YOUR_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/agent-orchestrator:latest && \
+  docker push YOUR_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/agent-orchestrator:latest
+
+docker build --platform linux/amd64 -t agent-retriever ./retriever && \
+  docker tag agent-retriever:latest \
+  YOUR_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/agent-retriever:latest && \
+  docker push YOUR_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/agent-retriever:latest
+
+docker build --platform linux/amd64 -t agent-ingestion ./ingestion && \
+  docker tag agent-ingestion:latest \
+  YOUR_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/agent-ingestion:latest && \
+  docker push YOUR_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/agent-ingestion:latest
 ```
 
 ### 5. Deploy ECS services
@@ -94,7 +101,8 @@ BUCKET=$(cat infra-outputs.json | python3 -c \
 aws s3 cp your-document.pdf s3://$BUCKET/your-document.pdf
 ```
 
-EventBridge automatically triggers the ingestion task. Wait ~60 seconds, then query the system.
+EventBridge automatically triggers the ingestion task. Wait ~60 seconds, then query the system. 
+Or you can upload a file on the S3 bucket to trigger the EventBridge.
 
 ### 7. Query the API
 
